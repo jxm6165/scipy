@@ -17,13 +17,12 @@ import numpy as np
 
 # unconstrained minimization
 from .optimize import (_minimize_neldermead, _minimize_powell, _minimize_cg,
-                       _minimize_bfgs,_minimize_naq,
-                       _minimize_olmoq,_minimize_olnaq,_minimize_olbfgs,_minimize_omosr1,
+                       _minimize_bfgs,_minimize_olmoq,_minimize_omosr1,_minimize_olnaq,_minimize_olbfgs,
                         _minimize_lmoq,_minimize_lnaq,_minimize_lbfgs,
                         _minimize_omoq,_minimize_onaq,_minimize_obfgs,
-                        _minimize_aSMoQ,_minimize_aSNAQ,_minimize_adaQN,
-                       _minimize_sr1,_minimize_sr1n,_minimize_mosr1, 
-                       _minimize_newtoncg,_minimize_scalar_brent, _minimize_scalar_bounded,
+                        _minimize_osr1,_minimize_osr1n,_minimize_omosr1,
+                       _minimize_sr1,_minimize_sr1n,_minimize_mosr1, _minimize_newtoncg,
+                       _minimize_scalar_brent, _minimize_scalar_bounded,
                        _minimize_scalar_golden, MemoizeJac)
 from ._trustregion_dogleg import _minimize_dogleg
 from ._trustregion_ncg import _minimize_trust_ncg
@@ -621,8 +620,6 @@ def minimize(fun, x0, args=(), method=None, jac=None, hess=None,
         return _minimize_cg(fun, x0, args, jac, callback, **options)
     elif meth == 'bfgs':
         return _minimize_bfgs(fun, x0, args, jac, callback, **options)
-    elif meth == 'naq':
-        return _minimize_naq(fun, x0, args, jac, callback, **options)
     elif meth == 'olmoq':
         return _minimize_olmoq(fun, x0, args, jac, callback, **options)
     elif meth == 'olnaq':
@@ -641,20 +638,16 @@ def minimize(fun, x0, args=(), method=None, jac=None, hess=None,
         return _minimize_onaq(fun, x0, args, jac, callback, **options)
     elif meth == 'obfgs':
         return _minimize_obfgs(fun, x0, args, jac, callback, **options)
-    elif meth == 'adaqn':
-        return _minimize_adaQN(fun, x0, args, jac, callback, **options)
-    elif meth == 'asnaq':
-        return _minimize_aSNAQ(fun, x0, args, jac, callback, **options)
-    elif meth == 'asmoq':
-        return _minimize_aSMoQ(fun, x0, args, jac, callback, **options)
-    elif meth == 'lsr1':
-        return _minimize_lsr1(fun, x0, args, jac, callback, **options)
+    elif meth == 'osr1':
+        return _minimize_osr1(fun, x0, args, jac, callback, **options)
+    elif meth == 'omosr1':
+        return _minimize_omosr1(fun, x0, args, jac, callback, **options)
+    elif meth == 'osr1n':
+        return _minimize_osr1n(fun, x0, args, jac, callback, **options)
     elif meth == 'sr1':
         return _minimize_sr1(fun, x0, args, jac, callback, **options)
     elif meth == 'sr1n':
         return _minimize_sr1n(fun, x0, args, jac, callback, **options)
-    elif meth == 'omosr1':
-        return _minimize_omosr1(fun, x0, args, jac, callback, **options)
     elif meth == 'mosr1':
         return _minimize_mosr1(fun, x0, args, jac, callback, **options)
     elif meth == 'newton-cg':

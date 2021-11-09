@@ -3647,7 +3647,6 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
     """
     Minimization of scalar function of one or more variables using the
     BFGS algorithm.
-
     Options
     -------
     disp : bool
@@ -3672,7 +3671,6 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         possibly adjusted to fit into the bounds. For ``method='3-point'``
         the sign of `h` is ignored. If None (default) then step is selected
         automatically.
-
     """
     _check_unknown_options(unknown_options)
     retall = return_all
@@ -3826,11 +3824,9 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
                     old_fval = LHS
                     print("LineSearch satisfied")
                     break
-
                 alpha_k /= 10
                 LHS = f(xk + alpha_k * pk)
                 RHS = old_old_fval + 1e-3 * alpha_k * gfk_times_pk
-
             '''alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = \
                      _line_search_wolfe12(f, myfprime, xk, pk, gfk,
                                           old_fval, old_old_fval, amin=1e-100, amax=1e100)'''
@@ -3898,7 +3894,6 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
                 print("Divide-by-zero encountered: rhok assumed large")
         else:
             rhok = 1. / rhok_inv
-
         A1 = I - sk[:, np.newaxis] * yk[np.newaxis, :] * rhok
         A2 = I - yk[:, np.newaxis] * sk[np.newaxis, :] * rhok
         Hk = np.dot(A1, np.dot(Hk, A2)) + (rhok * sk[:, np.newaxis] *
@@ -3942,15 +3937,10 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         result['allvecs'] = allvecs
     return result
 
-
 def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=100, thetak=None,delta_k=None,
                   gtol=1e-5, norm=Inf, eps=_epsilon, maxiter=None, errHistory=None,m=10,vk_vec=None,res=[], muHist=[],
                   disp=False, return_all=False, finite_diff_rel_step=None,s_vec=None, y_vec=None, gfk_vec=None,
                   **unknown_options):
-    
-    
-        
-    
     _check_unknown_options(unknown_options)
     f = fun
     fprime = jac
@@ -3979,28 +3969,26 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
 
     if k == 0:
         deltak = 1
+        theta_k = 1
         delta_k.append(deltak)
         old_fval = f(xk)
         gfk = myfprime(xk).reshape(-1, 1)
+        gfk_vec.append(gfk)
+        gfk_vec.append(gfk)
         import time
         timePlot.append(0)
         errHistory.append(old_fval)
         vk = np.zeros_like(xk)
-        theta_k = 1
-        gfk_vec.append(gfk)
-        gfk_vec.append(gfk)
-        
+
     else:
         deltak = delta_k[0]
         gfk = gfk_vec[-1]
         vk = vk_vec[0]
-        theta_k = thetak[0]
+        theta_k = thetak[-1]
         old_fval = errHistory[-1]
-
 
     # Sets the initial step guess to dx ~ 1
     # old_old_fval = old_fval + np.linalg.norm(gfk) / 2
-
 
     if retall:
         allvecs = [x0]
@@ -4009,16 +3997,16 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
 
     flag = 1
     start_time = time.time()
-    
+
     theta_kp1 = ((gamma - (theta_k * theta_k)) + np.sqrt(
-            ((gamma - (theta_k * theta_k)) * (gamma - (theta_k * theta_k))) + 4 * theta_k * theta_k)) / 2
+        ((gamma - (theta_k * theta_k)) * (gamma - (theta_k * theta_k))) + 4 * theta_k * theta_k)) / 2
     mu = (theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1)
     muHist.append(mu)
     theta_k = theta_kp1
-    thetak.append(theta_k)
-    
-    #gfk = myfprime(xk+mu*vk).reshape(-1, 1)
-    agfk = (1 + mu) * gfk_vec[1] - mu * gfk_vec[0]
+    # thetak.append(theta_k)
+
+    #gfk = myfprime(xk + mu * vk).reshape(-1, 1)
+    agfk = (1 + mu) * gfk_vec[-1] - mu * gfk_vec[-2]
 
     if k == 0:
         np.random.seed(seed)
@@ -4030,12 +4018,22 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
     S = np.squeeze(np.asarray(s_vec)).T
     Y = np.squeeze(np.asarray(y_vec)).T
 
-    sk_TR = CG_Steinhaug_matFree(epsTR, agfk, deltak, S, Y, N)
+    try:
+        sk_TR = CG_Steinhaug_matFree(epsTR, agfk, deltak, S, Y, N)
+    except:
+        print("reset mu")
+        gfk = myfprime(xk).reshape(-1, 1)
+        theta_k = 1
+        mu = 0
+        muHist.pop()
+        muHist.append(mu)
+        sk_TR = CG_Steinhaug_matFree(epsTR, gfk, deltak, S, Y, N)
+
     # sk_TR =  -np.dot(Hk, gfk) * deltak
 
-    new_fval = f(xk+mu*vk+sk_TR)
+    new_fval = f(xk + mu * vk + sk_TR)
     ared = old_fval - new_fval  # Compute actual reduction
-    
+
     Lp = np.zeros((Y.shape[1], Y.shape[1]))
     for ii in range(Y.shape[1]):
         for jj in range(0, ii):
@@ -4047,36 +4045,40 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
     tmpp1 = np.matmul(Y.T, sk_TR)
     tmpp2 = np.matmul(Minvp, tmpp1)
     Bk_skTR = np.matmul(Y, tmpp2)
-    #Bk_skTR = np.dot(Hk, sk_TR)
+    # Bk_skTR = np.dot(Hk, sk_TR)
     pred = -(agfk.T.dot(sk_TR) + 0.5 * sk_TR.T.dot(Bk_skTR))  # Compute predicted reduction
 
     # Update trust region radius
     if ared / pred > 0.75:
         deltak = 2 * deltak
     elif ared / pred >= 0.1 and ared / pred <= 0.75:
+        # theta_k = thetak[-1]
         pass  # no need to change deltak
     elif ared / pred < 0.1:
         deltak = deltak * 0.5
-
+        # theta_k = theta_k * 0.5
 
     delta_k.append(deltak)
-    
+
     # Take step
     if ared / pred > eta:
-        #count = 0
-        xkp1 = xk +mu*vk + sk_TR
-        vkp1 = mu*vk + sk_TR
+        # count = 0
+        xkp1 = xk + mu * vk + sk_TR
+        vkp1 = mu * vk + sk_TR
         old_fval = f(xkp1)
 
     else:
-        #count += 1
-        theta_k = 1
-        thetak.append(theta_k)
+        # count += 1
+        # theta_k = 1
+        # theta_k = thetak[-1]
+        # thetak.append(theta_k)
+        theta_k = theta_k * 0.5
+
         xkp1 = xk
         vkp1 = vk
         flag = 0
-        
-    
+
+    thetak.append(theta_k)
 
     if flag:
 
@@ -4085,14 +4087,16 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
         sk = sk_TR  # xkp1 - xk
         xk = xkp1
         vk = vkp1
-        
+
         # if gfkp1 is None:
         gfkp1 = myfprime(xkp1).reshape(-1, 1)
+
+        gnorm = vecnorm(gfkp1, ord=norm)
 
         yk = gfkp1 - agfk
 
         # Global Convergence Term
-        """p_times_q = np.dot(sk.T, yk)
+        p_times_q = np.dot(sk.T, yk)
         if gnorm > 1e-2:
             const = 2.0
         else:
@@ -4101,8 +4105,9 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
             p_times_p = np.dot(sk.T, sk)
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
-            zeta = const"""
-        # yk = yk + zeta * gnorm * sk
+            zeta = const
+
+        yk = yk + zeta * gnorm * sk
 
         gfk = gfkp1
         gfk_vec.append(gfkp1)
@@ -4110,8 +4115,6 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
         s_vec.append(sk)
         y_vec.append(yk)
         vk_vec.append(vk)
-
-
 
     end = time.time()
     timePlot.append(end - start)
@@ -4125,8 +4128,6 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
                             nit=k)
 
     return result
-    
-
 
 
 def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=100,
@@ -4136,7 +4137,6 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
     """
     Minimization of scalar function of one or more variables using the
     BFGS algorithm.
-
     Options
     -------
     disp : bool
@@ -4161,7 +4161,6 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
         possibly adjusted to fit into the bounds. For ``method='3-point'``
         the sign of `h` is ignored. If None (default) then step is selected
         automatically.
-
     """
     _check_unknown_options(unknown_options)
     retall = return_all
@@ -4313,11 +4312,9 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
                     old_fval = LHS
                     print("LineSearch satisfied")
                     break
-
                 alpha_k /= 10
                 LHS = f(xk + alpha_k * pk)
                 RHS = old_old_fval + 1e-3 * alpha_k * gfk_times_pk
-
             '''alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = \
                      _line_search_wolfe12(f, myfprime, xk, pk, gfk,
                                           old_fval, old_old_fval, amin=1e-100, amax=1e100)'''
@@ -4341,7 +4338,7 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
 
 
         # Global Convergence Term
-        """p_times_q = np.dot(sk.T, yk)
+        p_times_q = np.dot(sk.T, yk)
         if gnorm > 1e-2:
             const = 2.0
         else:
@@ -4350,8 +4347,8 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
             p_times_p = np.dot(sk.T, sk)
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
-            zeta = const"""
-        #yk = yk + zeta * gnorm * sk
+            zeta = const
+        yk = yk + zeta * gnorm * sk
 
         gfk = gfkp1
 
@@ -4384,7 +4381,6 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
                 print("Divide-by-zero encountered: rhok assumed large")
         else:
             rhok = 1. / rhok_inv
-
         A1 = I - sk[:, np.newaxis] * yk[np.newaxis, :] * rhok
         A2 = I - yk[:, np.newaxis] * sk[np.newaxis, :] * rhok
         Hk = np.dot(A1, np.dot(Hk, A2)) + (rhok * sk[:, np.newaxis] *
@@ -4427,7 +4423,6 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
     if retall:
         result['allvecs'] = allvecs
     return result
-
 
 
 def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=100,
@@ -4510,7 +4505,7 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         deltak = delta_k[0]
         gfk = gfk_vec[0]
         vk = vk_vec[0]
-        theta_k = thetak[0]
+        theta_k = thetak[-1]
         old_fval = errHistory[-1]
 
 
@@ -4531,7 +4526,7 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
     mu = (theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1)
     muHist.append(mu)
     theta_k = theta_kp1
-    thetak.append(theta_k)
+    #thetak.append(theta_k)
     
     gfk = myfprime(xk+mu*vk).reshape(-1, 1)
 
@@ -4545,7 +4540,17 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
     S = np.squeeze(np.asarray(s_vec)).T
     Y = np.squeeze(np.asarray(y_vec)).T
 
-    sk_TR = CG_Steinhaug_matFree(epsTR, gfk, deltak, S, Y, N)
+    try:
+        sk_TR = CG_Steinhaug_matFree(epsTR, gfk, deltak, S, Y, N)
+    except:
+        print("reset mu")
+        gfk = myfprime(xk).reshape(-1, 1)
+        theta_k = 1
+        mu = 0
+        muHist.pop()
+        muHist.append(mu)
+        sk_TR = CG_Steinhaug_matFree(epsTR, gfk, deltak, S, Y, N)
+
     # sk_TR =  -np.dot(Hk, gfk) * deltak
 
     new_fval = f(xk+mu*vk+sk_TR)
@@ -4569,9 +4574,12 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
     if ared / pred > 0.75:
         deltak = 2 * deltak
     elif ared / pred >= 0.1 and ared / pred <= 0.75:
+        #theta_k = thetak[-1]
         pass  # no need to change deltak
     elif ared / pred < 0.1:
         deltak = deltak * 0.5
+        #theta_k = theta_k * 0.5
+
 
 
     delta_k.append(deltak)
@@ -4585,12 +4593,16 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
 
     else:
         #count += 1
-        theta_k = 1
-        thetak.append(theta_k)
+        #theta_k = 1
+        #theta_k = thetak[-1]
+        #thetak.append(theta_k)
+        theta_k = theta_k * 0.5
+
         xkp1 = xk
         vkp1 = vk
         flag = 0
-    
+
+    thetak.append(theta_k)
 
     if flag:
 
@@ -4603,10 +4615,12 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         # if gfkp1 is None:
         gfkp1 = myfprime(xkp1).reshape(-1, 1)
 
+        gnorm = vecnorm(gfkp1, ord=norm)
+
         yk = gfkp1 - gfk
 
         # Global Convergence Term
-        """p_times_q = np.dot(sk.T, yk)
+        p_times_q = np.dot(sk.T, yk)
         if gnorm > 1e-2:
             const = 2.0
         else:
@@ -4615,8 +4629,9 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
             p_times_p = np.dot(sk.T, sk)
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
-            zeta = const"""
-        # yk = yk + zeta * gnorm * sk
+            zeta = const
+
+        yk = yk + zeta * gnorm * sk
 
         gfk = gfkp1
         gfk_vec.append(gfkp1)
@@ -4640,9 +4655,6 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
                             nit=k)
 
     return result
-
-    
-    
 
 
 def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=100,
@@ -4920,8 +4932,6 @@ def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=10
     return result
 
 
-
-
 def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=100,
                   gtol=1e-5, norm=Inf, eps=_epsilon, maxiter=None, errHistory=None,s_vec=None,y_vec=None,gfk_vec=None,
                   disp=False, return_all=False, finite_diff_rel_step=None,m=10,etol=None,delta_k=None,
@@ -4980,8 +4990,8 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
 
     if k == 0:
         np.random.seed(seed)
-        Stemp = np.random.randn(N, m)
-        for index in range(m):
+        Stemp = np.random.randn(N, 2)
+        for index in range(2):
             y_vec.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
             s_vec.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
 
@@ -5037,7 +5047,7 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
         yk = gfkp1 - gfk
 
         # Global Convergence Term
-        """p_times_q = np.dot(sk.T, yk)
+        p_times_q = np.dot(sk.T, yk)
         if gnorm > 1e-2:
             const = 2.0
         else:
@@ -5046,8 +5056,8 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
             p_times_p = np.dot(sk.T, sk)
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
-            zeta = const"""
-        # yk = yk + zeta * gnorm * sk
+            zeta = const
+        yk = yk + zeta * gnorm * sk
 
         gfk = gfkp1
         gfk_vec.append(gfkp1)
@@ -5070,10 +5080,6 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
                             nit=k)
 
     return result
-
-
-
-
 
 
 def fmin_cg(f, x0, fprime=None, args=(), gtol=1e-5, norm=Inf, epsilon=_epsilon,

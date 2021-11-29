@@ -2583,6 +2583,102 @@ def _minimize_olbfgs(fun, x0, args=(), jac=None, callback=None,
 
     return result
 
+def _minimize_olbfgs1(fun, x0, args=(), jac=None, callback=None,
+                     gtol=1e-5, norm=Inf, eps=_epsilon, maxiter=None, err=[], timeplot=[],
+                     disp=False, return_all=False, vk_vec=None, sk_vec=None, yk_vec=None, m=8, alpha_k=1.0, mu=None,
+                     dirNorm=True,gfk_vec=None,
+                     **unknown_options):
+    '''
+    Minimization of scalar function of one or more variables using the
+    BFGS algorithm.
+    Options
+    -------
+    disp : bool
+        Set to True to print convergence messages.
+    maxiter : int
+        Maximum number of iterations to perform.
+    gtol : float
+        Gradient norm must be less than `gtol` before successful
+        termination.
+    norm : float
+        Order of norm (Inf is max, -Inf is min).
+    eps : float or ndarray
+        If `jac` is approximated, use this value for the step size.
+    '''
+
+    _check_unknown_options(unknown_options)
+    f = fun
+    fprime = jac
+    epsilon = eps
+    retall = return_all
+
+    xk = asarray(x0).flatten()
+    func_calls, f = wrap_function(f, args)
+    if fprime is None:
+        grad_calls, myfprime = wrap_function(approx_fprime, (f, epsilon))
+    else:
+        grad_calls, myfprime = wrap_function(fprime, args)
+
+    import time
+    start = time.time()
+    k = len(sk_vec)
+
+
+    if k>0:
+        gfk = gfk_vec[-1]
+    else:
+        gfk = myfprime(xk)
+
+    pk = -gfk
+
+    # two loop recursivef
+    a = []
+    idx = min(k, m)
+    for i in range(min(k, m)):
+        a.append(np.dot(sk_vec[idx - 1 - i].T, pk) / np.dot(sk_vec[idx - 1 - i].T, yk_vec[idx - 1 - i]))
+        pk = pk - a[i] * yk_vec[idx - 1 - i]
+    if k > 0:
+        term = 0
+        for i in range(min(k, m)):
+            term = term + (np.dot(sk_vec[idx - 1 - i].T, yk_vec[idx - 1 - i]) / np.dot(yk_vec[idx - 1 - i].T,
+                                                                                       yk_vec[idx - 1 - i]))
+        pk = pk * term / idx
+    else:
+        pk = 1e-10 * pk
+    for i in reversed(range(min(k, m))):
+        b = np.dot(yk_vec[idx - 1 - i].T, pk) / np.dot(yk_vec[idx - 1 - i].T, sk_vec[idx - 1 - i])
+        pk = pk + (a[i] - b) * sk_vec[idx - 1 - i]
+
+    if dirNorm == True:
+        pk = pk / vecnorm(pk, 2)  # direction normalization
+
+    sk = alpha_k[0] * pk
+    xkp1 = xk + sk
+
+    sk_vec.append(sk)
+
+    gfkp1 = myfprime(xkp1)
+    yk = gfkp1 - gfk + sk
+    yk_vec.append(yk)
+    gfk_vec.append(gfkp1)
+
+    xk = xkp1
+
+    end = time.time()
+    timeplot.append(end - start)
+
+    err.append(f(xk))
+    if callback is not None:
+        callback(xk)
+    k += 1
+
+    result = OptimizeResult(fun=0, jac=0, hess_inv=0, nfev=0,
+                            njev=0, status=0,
+                            success=(0), message=0, x=xkp1,
+                            nit=k)
+
+    return result
+
 
 def _minimize_olnaq(fun, x0, args=(), jac=None, callback=None,
                     gtol=1e-5, norm=Inf, eps=_epsilon, maxiter=None, err=[], timeplot=[],
@@ -3683,8 +3779,11 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
 
     print("Parameters ", len(x0))
     import collections
-    s_vec = collections.deque(maxlen=m)
-    y_vec = collections.deque(maxlen=m)
+    from numpy import linalg as LA
+    S = collections.deque(maxlen=m)
+    Y = collections.deque(maxlen=m)
+    s_vec_tmp = collections.deque(maxlen=m)
+    y_vec_tmp = collections.deque(maxlen=m)
 
 
     sf = _prepare_scalar_function(fun, x0, jac, args=args, epsilon=eps,
@@ -3707,6 +3806,7 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
 
     k = 0
     N = len(x0)
+    num_weights = len(x0)
     I = np.eye(N, dtype=int)
     Hk = I
     deltak = 1
@@ -3743,7 +3843,7 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         #mu = np.minimum((theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1), 0.8)
         mu = (theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1)
         muHist.append(mu)
-        # mu = 0.6#(theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1)
+        #mu = 0#.85#(theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1)
         theta_k = theta_kp1
 
         #print("k ", k, " fval ", old_fval, " mu ", mu)
@@ -3758,11 +3858,41 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
             Stemp = np.random.randn(N, m)
 
             for index in range(m):
-                y_vec.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
-                s_vec.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+                y_vec_tmp.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
+                s_vec_tmp.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
 
-        S = np.squeeze(np.asarray(s_vec)).T
-        Y = np.squeeze(np.asarray(y_vec)).T
+            Stemp = np.squeeze(np.asarray(s_vec_tmp)).T
+            Ytemp = np.squeeze(np.asarray(y_vec_tmp)).T
+
+            S = np.zeros((num_weights, 0))
+            Y = np.zeros((num_weights, 0))
+
+            counterSucc = 0
+            for idx in range(m):
+
+                L = np.zeros((Y.shape[1], Y.shape[1]))
+                for ii in range(Y.shape[1]):
+                    for jj in range(0, ii):
+                        L[ii, jj] = S[:, ii].dot(Y[:, jj])
+
+                tmp = np.sum((S * Y), axis=0)
+                D = np.diag(tmp)
+                M = (D + L + L.T)
+                Minv = np.linalg.inv(M)
+
+                tmp1 = np.matmul(Y.T, Stemp[:, idx])
+                tmp2 = np.matmul(Minv, tmp1)
+                Bksk = np.squeeze(np.matmul(Y, tmp2))
+                yk_BkskDotsk = (Ytemp[:, idx] - Bksk).T.dot(Stemp[:, idx])
+                if np.abs(np.squeeze(yk_BkskDotsk)) > (
+                        eps * (LA.norm(Ytemp[:, idx] - Bksk) * LA.norm(Stemp[:, idx]))):
+                    counterSucc += 1
+
+                    S = np.append(S, Stemp[:, idx].reshape(num_weights, 1), axis=1)
+                    Y = np.append(Y, Ytemp[:, idx].reshape(num_weights, 1), axis=1)
+
+        #S = np.squeeze(np.asarray(s_vec)).T
+        #Y = np.squeeze(np.asarray(y_vec)).T
 
         sk_TR = CG_Steinhaug_matFree(epsTR, agfk, deltak, S, Y, N)
         #sk_TR =  -np.dot(Hk, gfk) * deltak
@@ -3805,10 +3935,10 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
             theta_k = 1
             xkp1 = xk
             vkp1 = vk
-            end_time = time.time()
-            timePlot.append(end_time - start_time)
-            errHistory.append(old_fval)
-            continue
+            #end_time = time.time()
+            #timePlot.append(end_time - start_time)
+            #errHistory.append(old_fval)
+            #continue
 
 
 
@@ -3844,6 +3974,7 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         xk = xkp1
         vk = vkp1
         # if gfkp1 is None:
+        gfkm2 = gfkm1
         gfkm1 = gfk
         gfk = myfprime(xkp1).reshape(-1,1)
 
@@ -3851,7 +3982,7 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
 
 
         # Global Convergence Term
-        """p_times_q = np.dot(sk.T, yk)
+        p_times_q = np.dot(sk.T, yk)
         if gnorm > 1e-2:
             const = 2.0
         else:
@@ -3860,13 +3991,21 @@ def _minimize_mosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
             p_times_p = np.dot(sk.T, sk)
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
-            zeta = const"""
+            zeta = const
         #yk = yk + zeta * gnorm * sk
+        yk = yk +  0.1 * sk
 
         #gfk = gfkp1
 
-        s_vec.append(sk)
-        y_vec.append(yk)
+        #if abs(np.dot(sk.T, (yk - Bk_skTR))) >= 1e-8 * vecnorm(sk)*vecnorm(yk - Bk_skTR):
+        yk_BkskDotsk = (yk - Bk_skTR).T.dot(sk)
+        if np.abs(np.squeeze(yk_BkskDotsk)) > (eps * (LA.norm(yk - Bksk) * LA.norm(sk))):
+            #s_vec.append(sk)
+            #y_vec.append(yk)
+            S = np.append(S, sk, axis=1)
+            Y = np.append(Y, yk, axis=1)
+            S = S[:, -10:]
+            Y = Y[:,-10:]
 
 
         if callback is not None:
@@ -3955,10 +4094,12 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
         grad_calls, myfprime = wrap_function(fprime, args)
 
     import time
+    from numpy import linalg as LA
     start = time.time()
 
     k = len(s_vec)
     N = len(x0)
+    num_weights = len(x0)
     I = np.eye(N, dtype=int)
     Hk = I
 
@@ -4009,11 +4150,47 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
     agfk = (1 + mu) * gfk_vec[-1] - mu * gfk_vec[-2]
 
     if k == 0:
+        # comment later
         np.random.seed(seed)
         Stemp = np.random.randn(N, m)
+        y_vec_tmp = []
+        s_vec_tmp = []
+
         for index in range(m):
-            y_vec.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
-            s_vec.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+            y_vec_tmp.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
+            s_vec_tmp.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+
+        Stemp = np.squeeze(np.asarray(s_vec_tmp)).T
+        Ytemp = np.squeeze(np.asarray(y_vec_tmp)).T
+
+        S = np.zeros((num_weights, 0))
+        Y = np.zeros((num_weights, 0))
+
+        counterSucc = 0
+        for idx in range(m):
+
+            L = np.zeros((Y.shape[1], Y.shape[1]))
+            for ii in range(Y.shape[1]):
+                for jj in range(0, ii):
+                    L[ii, jj] = S[:, ii].dot(Y[:, jj])
+
+            tmp = np.sum((S * Y), axis=0)
+            D = np.diag(tmp)
+            M = (D + L + L.T)
+            Minv = np.linalg.inv(M)
+
+            tmp1 = np.matmul(Y.T, Stemp[:, idx])
+            tmp2 = np.matmul(Minv, tmp1)
+            Bksk = np.squeeze(np.matmul(Y, tmp2))
+            yk_BkskDotsk = (Ytemp[:, idx] - Bksk).T.dot(Stemp[:, idx])
+            if np.abs(np.squeeze(yk_BkskDotsk)) > (
+                    eps * (LA.norm(Ytemp[:, idx] - Bksk) * LA.norm(Stemp[:, idx]))):
+                counterSucc += 1
+
+                S = np.append(S, Stemp[:, idx].reshape(num_weights, 1), axis=1)
+                Y = np.append(Y, Ytemp[:, idx].reshape(num_weights, 1), axis=1)
+                y_vec.append(Ytemp[:, idx].reshape(num_weights, 1))
+                s_vec.append(Stemp[:, idx].reshape(num_weights, 1))
 
     S = np.squeeze(np.asarray(s_vec)).T
     Y = np.squeeze(np.asarray(y_vec)).T
@@ -4072,7 +4249,9 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
         # theta_k = 1
         # theta_k = thetak[-1]
         # thetak.append(theta_k)
-        theta_k = theta_k * 0.5
+        theta_k = 0.5
+        if deltak < 1e-5:
+            theta_k = 0.1
 
         xkp1 = xk
         vkp1 = vk
@@ -4080,7 +4259,7 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
 
     thetak.append(theta_k)
 
-    if flag:
+    if True:#flag:
 
         if retall:
             allvecs.append(xkp1)
@@ -4112,9 +4291,10 @@ def _minimize_omosr1(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=
         gfk = gfkp1
         gfk_vec.append(gfkp1)
 
-        s_vec.append(sk)
-        y_vec.append(yk)
-        vk_vec.append(vk)
+        if abs(np.dot(sk.T, (yk - Bk_skTR))) >= 1e-8 * vecnorm(sk)*vecnorm(yk - Bk_skTR):
+            s_vec.append(sk)
+            y_vec.append(yk)
+            vk_vec.append(vk)
 
     end = time.time()
     timePlot.append(end - start)
@@ -4172,8 +4352,9 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
         maxiter = len(x0) * 200
 
     import collections
-    s_vec = collections.deque(maxlen=m)
-    y_vec = collections.deque(maxlen=m)
+    from numpy import linalg as LA
+    s_vec_tmp = collections.deque(maxlen=m)
+    y_vec_tmp = collections.deque(maxlen=m)
 
 
     sf = _prepare_scalar_function(fun, x0, jac, args=args, epsilon=eps,
@@ -4196,6 +4377,7 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
 
     k = 0
     N = len(x0)
+    num_weights = len(x0)
     I = np.eye(N, dtype=int)
     Hk = I
     deltak = 1
@@ -4241,17 +4423,44 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
 
         gfk = myfprime(xk+mu*vk).reshape(-1, 1)
 
-        if k==1:
-            #comment later
+        if k == 1:
+            # comment later
             np.random.seed(seed)
             Stemp = np.random.randn(N, m)
 
             for index in range(m):
-                y_vec.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
-                s_vec.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+                y_vec_tmp.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
+                s_vec_tmp.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
 
-        S = np.squeeze(np.asarray(s_vec)).T
-        Y = np.squeeze(np.asarray(y_vec)).T
+            Stemp = np.squeeze(np.asarray(s_vec_tmp)).T
+            Ytemp = np.squeeze(np.asarray(y_vec_tmp)).T
+
+            S = np.zeros((num_weights, 0))
+            Y = np.zeros((num_weights, 0))
+
+            counterSucc = 0
+            for idx in range(m):
+
+                L = np.zeros((Y.shape[1], Y.shape[1]))
+                for ii in range(Y.shape[1]):
+                    for jj in range(0, ii):
+                        L[ii, jj] = S[:, ii].dot(Y[:, jj])
+
+                tmp = np.sum((S * Y), axis=0)
+                D = np.diag(tmp)
+                M = (D + L + L.T)
+                Minv = np.linalg.inv(M)
+
+                tmp1 = np.matmul(Y.T, Stemp[:, idx])
+                tmp2 = np.matmul(Minv, tmp1)
+                Bksk = np.squeeze(np.matmul(Y, tmp2))
+                yk_BkskDotsk = (Ytemp[:, idx] - Bksk).T.dot(Stemp[:, idx])
+                if np.abs(np.squeeze(yk_BkskDotsk)) > (
+                        eps * (LA.norm(Ytemp[:, idx] - Bksk) * LA.norm(Stemp[:, idx]))):
+                    counterSucc += 1
+
+                    S = np.append(S, Stemp[:, idx].reshape(num_weights, 1), axis=1)
+                    Y = np.append(Y, Ytemp[:, idx].reshape(num_weights, 1), axis=1)
 
         sk_TR = CG_Steinhaug_matFree(epsTR, gfk, deltak, S, Y, N)
         #sk_TR =  -np.dot(Hk, gfk) * deltak
@@ -4283,7 +4492,7 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
 
         # Take step
         if ared / pred > eta:
-            #count = 0
+            count += 1
             xkp1 = xk +mu*vk + sk_TR
             vkp1 = mu*vk + sk_TR
             old_fval = f(xkp1)
@@ -4349,12 +4558,18 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
         else:
             zeta = const
         yk = yk + zeta * gnorm * sk
+        #yk = yk + sk
 
         gfk = gfkp1
 
-        s_vec.append(sk)
-        y_vec.append(yk)
-
+        yk_BkskDotsk = (yk - Bk_skTR).T.dot(sk)
+        if np.abs(np.squeeze(yk_BkskDotsk)) > (eps * (LA.norm(yk - Bksk) * LA.norm(sk))):
+            # s_vec.append(sk)
+            # y_vec.append(yk)
+            S = np.append(S, sk, axis=1)
+            Y = np.append(Y, yk, axis=1)
+            S = S[:, -10:]
+            Y = Y[:, -10:]
 
         if callback is not None:
             callback(xk)
@@ -4415,6 +4630,7 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
         print("         Iterations: %d" % k)
         print("         Function evaluations: %d" % sf.nfev)
         print("         Gradient evaluations: %d" % sf.ngev)
+        print("         Successful updates  : %d" % count)
 
     result = OptimizeResult(fun=fval, jac=gfk, hess_inv=Hk, nfev=sf.nfev,
                             njev=sf.ngev, status=warnflag,
@@ -4425,7 +4641,7 @@ def _minimize_sr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=10
     return result
 
 
-def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=100,
+def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=100,mu_val=[],
                   gtol=1e-5, norm=Inf, eps=_epsilon, maxiter=None, errHistory=None,m=10, delta_k=None, muHist=[],
                   disp=False, return_all=False, finite_diff_rel_step=None,etol=None,s_vec=None,y_vec=None,vk_vec=None,gfk_vec=None,thetak=None,
                   **unknown_options):
@@ -4477,10 +4693,12 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         grad_calls, myfprime = wrap_function(fprime, args)
 
     import time
+    from numpy import linalg as LA
     start = time.time()
 
     k = len(s_vec)
     N = len(x0)
+    num_weights = len(x0)
     I = np.eye(N, dtype=int)
     Hk = I
 
@@ -4523,19 +4741,56 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
     
     theta_kp1 = ((gamma - (theta_k * theta_k)) + np.sqrt(
             ((gamma - (theta_k * theta_k)) * (gamma - (theta_k * theta_k))) + 4 * theta_k * theta_k)) / 2
-    mu = (theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1)
+    mu = np.minimum((theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1),0.9)
     muHist.append(mu)
     theta_k = theta_kp1
+    nochangeT = True
     #thetak.append(theta_k)
     
     gfk = myfprime(xk+mu*vk).reshape(-1, 1)
 
     if k == 0:
+        # comment later
         np.random.seed(seed)
         Stemp = np.random.randn(N, m)
+        y_vec_tmp = []
+        s_vec_tmp = []
+
         for index in range(m):
-            y_vec.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
-            s_vec.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+            y_vec_tmp.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
+            s_vec_tmp.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+
+        Stemp = np.squeeze(np.asarray(s_vec_tmp)).T
+        Ytemp = np.squeeze(np.asarray(y_vec_tmp)).T
+
+        S = np.zeros((num_weights, 0))
+        Y = np.zeros((num_weights, 0))
+
+        counterSucc = 0
+        for idx in range(m):
+
+            L = np.zeros((Y.shape[1], Y.shape[1]))
+            for ii in range(Y.shape[1]):
+                for jj in range(0, ii):
+                    L[ii, jj] = S[:, ii].dot(Y[:, jj])
+
+            tmp = np.sum((S * Y), axis=0)
+            D = np.diag(tmp)
+            M = (D + L + L.T)
+            Minv = np.linalg.inv(M)
+
+            tmp1 = np.matmul(Y.T, Stemp[:, idx])
+            tmp2 = np.matmul(Minv, tmp1)
+            Bksk = np.squeeze(np.matmul(Y, tmp2))
+            yk_BkskDotsk = (Ytemp[:, idx] - Bksk).T.dot(Stemp[:, idx])
+            if np.abs(np.squeeze(yk_BkskDotsk)) > (
+                    eps * (LA.norm(Ytemp[:, idx] - Bksk) * LA.norm(Stemp[:, idx]))):
+                counterSucc += 1
+
+                S = np.append(S, Stemp[:, idx].reshape(num_weights, 1), axis=1)
+                Y = np.append(Y, Ytemp[:, idx].reshape(num_weights, 1), axis=1)
+                y_vec.append(Ytemp[:, idx].reshape(num_weights, 1))
+                s_vec.append(Stemp[:, idx].reshape(num_weights, 1))
 
     S = np.squeeze(np.asarray(s_vec)).T
     Y = np.squeeze(np.asarray(y_vec)).T
@@ -4574,15 +4829,15 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
     if ared / pred > 0.75:
         deltak = 2 * deltak
     elif ared / pred >= 0.1 and ared / pred <= 0.75:
-        #theta_k = thetak[-1]
         pass  # no need to change deltak
     elif ared / pred < 0.1:
         deltak = deltak * 0.5
-        #theta_k = theta_k * 0.5
-
+        #theta_k = 1
+        #nochangeT = False
 
 
     delta_k.append(deltak)
+
     
     # Take step
     if ared / pred > eta:
@@ -4592,19 +4847,25 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         old_fval = f(xkp1)
 
     else:
+
         #count += 1
-        #theta_k = 1
+        theta_k = 0.5
+        if deltak < 1e-5:
+            theta_k = 0.1
+        #if nochangeT:
         #theta_k = thetak[-1]
         #thetak.append(theta_k)
-        theta_k = theta_k * 0.5
+        #theta_k = theta_k * 0.5
 
         xkp1 = xk
         vkp1 = vk
         flag = 0
 
+    #if mu>=0.95: theta_k=1
+
     thetak.append(theta_k)
 
-    if flag:
+    if True:#flag:
 
         if retall:
             allvecs.append(xkp1)
@@ -4631,14 +4892,34 @@ def _minimize_osr1n(fun, x0, args=(), jac=None, callback=None,timePlot=[],seed=1
         else:
             zeta = const
 
-        yk = yk + zeta * gnorm * sk
+        myk = yk + zeta * gnorm * sk
 
         gfk = gfkp1
         gfk_vec.append(gfkp1)
 
-        s_vec.append(sk)
-        y_vec.append(yk)
-        vk_vec.append(vk)
+
+        """
+        yk_BkskDotsk = (Ytemp[:,idx]- Bksk ).T.dot(Stemp[:,idx]  )  
+        if np.abs(np.squeeze(yk_BkskDotsk)) > (eps *(LA.norm(Ytemp[:,idx]- Bksk )  * LA.norm(Stemp[:,idx]))  ):        
+            counterSucc += 1
+
+            S = np.append(S,Stemp[:,idx].reshape(num_weights,1),axis = 1)
+            Y = np.append(Y,Ytemp[:,idx].reshape(num_weights,1),axis=1)
+        """
+
+        if abs(np.dot(sk.T, (myk - Bk_skTR))) >= 1e-8 * vecnorm(sk)*vecnorm(myk - Bk_skTR):
+            #print("global conv")
+            s_vec.append(sk)
+            y_vec.append(myk)
+            vk_vec.append(vk)
+
+        elif abs(np.dot(sk.T, (yk - Bk_skTR))) >= 1e-8 * vecnorm(sk)*vecnorm(yk - Bk_skTR):
+            #print("no global conv")
+            s_vec.append(sk)
+            y_vec.append(yk)
+            vk_vec.append(vk)
+
+        else: print("update skipped")
 
 
 
@@ -4701,8 +4982,9 @@ def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=10
         maxiter = len(x0) * 200
 
     import collections
-    s_vec = collections.deque(maxlen=m)
-    y_vec = collections.deque(maxlen=m)
+    from numpy import linalg as LA
+    s_vec_tmp = collections.deque(maxlen=m)
+    y_vec_tmp = collections.deque(maxlen=m)
 
 
     sf = _prepare_scalar_function(fun, x0, jac, args=args, epsilon=eps,
@@ -4725,6 +5007,7 @@ def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=10
 
     k = 0
     N = len(x0)
+    num_weights = len(x0)
     I = np.eye(N, dtype=int)
     Hk = I
     deltak = 1
@@ -4751,16 +5034,47 @@ def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=10
         #print(old_fval)
         #errHistory.append(old_fval)
 
-
-        if k==1:
+        if k == 1:
+            # comment later
             np.random.seed(seed)
             Stemp = np.random.randn(N, m)
-            for index in range(m):
-                y_vec.append(myfprime(xk + 1 * Stemp[:,index].reshape(-1,1)).reshape(-1,1))
-                s_vec.append(xk + 1 * Stemp[:,index].reshape(-1,1))
 
-        S = np.squeeze(np.asarray(s_vec)).T
-        Y = np.squeeze(np.asarray(y_vec)).T
+            for index in range(m):
+                y_vec_tmp.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
+                s_vec_tmp.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+
+            Stemp = np.squeeze(np.asarray(s_vec_tmp)).T
+            Ytemp = np.squeeze(np.asarray(y_vec_tmp)).T
+
+            S = np.zeros((num_weights, 0))
+            Y = np.zeros((num_weights, 0))
+
+            counterSucc = 0
+            for idx in range(m):
+
+                L = np.zeros((Y.shape[1], Y.shape[1]))
+                for ii in range(Y.shape[1]):
+                    for jj in range(0, ii):
+                        L[ii, jj] = S[:, ii].dot(Y[:, jj])
+
+                tmp = np.sum((S * Y), axis=0)
+                D = np.diag(tmp)
+                M = (D + L + L.T)
+                Minv = np.linalg.inv(M)
+
+                tmp1 = np.matmul(Y.T, Stemp[:, idx])
+                tmp2 = np.matmul(Minv, tmp1)
+                Bksk = np.squeeze(np.matmul(Y, tmp2))
+                yk_BkskDotsk = (Ytemp[:, idx] - Bksk).T.dot(Stemp[:, idx])
+                if np.abs(np.squeeze(yk_BkskDotsk)) > (
+                        eps * (LA.norm(Ytemp[:, idx] - Bksk) * LA.norm(Stemp[:, idx]))):
+                    counterSucc += 1
+
+                    S = np.append(S, Stemp[:, idx].reshape(num_weights, 1), axis=1)
+                    Y = np.append(Y, Ytemp[:, idx].reshape(num_weights, 1), axis=1)
+
+        #S = np.squeeze(np.asarray(s_vec)).T
+        #Y = np.squeeze(np.asarray(y_vec)).T
 
         sk_TR = CG_Steinhaug_matFree(epsTR, gfk, deltak, S, Y, N)
         #sk_TR =  -np.dot(Hk, gfk) * deltak
@@ -4844,7 +5158,7 @@ def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=10
 
 
         # Global Convergence Term
-        """p_times_q = np.dot(sk.T, yk)
+        p_times_q = np.dot(sk.T, yk)
         if gnorm > 1e-2:
             const = 2.0
         else:
@@ -4853,14 +5167,20 @@ def _minimize_sr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=10
             p_times_p = np.dot(sk.T, sk)
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
-            zeta = const"""
+            zeta = const
         #yk = yk + zeta * gnorm * sk
+        #yk = yk + sk
 
         gfk = gfkp1
 
-        s_vec.append(sk)
-        y_vec.append(yk)
-
+        yk_BkskDotsk = (yk - Bk_skTR).T.dot(sk)
+        if np.abs(np.squeeze(yk_BkskDotsk)) > (eps * (LA.norm(yk - Bksk) * LA.norm(sk))):
+            # s_vec.append(sk)
+            # y_vec.append(yk)
+            S = np.append(S, sk, axis=1)
+            Y = np.append(Y, yk, axis=1)
+            S = S[:, -10:]
+            Y = Y[:, -10:]
 
         if callback is not None:
             callback(xk)
@@ -4951,10 +5271,12 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
         grad_calls, myfprime = wrap_function(fprime, args)
 
     import time
+    from numpy import linalg as LA
     start = time.time()
 
     k = len(s_vec)
     N = len(x0)
+    num_weights = len(x0)
     I = np.eye(N, dtype=int)
     Hk = I
 
@@ -4989,11 +5311,47 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
     start_time = time.time()
 
     if k == 0:
+        # comment later
         np.random.seed(seed)
-        Stemp = np.random.randn(N, 2)
-        for index in range(2):
-            y_vec.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
-            s_vec.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+        Stemp = np.random.randn(N, m)
+        y_vec_tmp = []
+        s_vec_tmp = []
+
+        for index in range(m):
+            y_vec_tmp.append(myfprime(xk + 1 * Stemp[:, index].reshape(-1, 1)).reshape(-1, 1))
+            s_vec_tmp.append(xk + 1 * Stemp[:, index].reshape(-1, 1))
+
+        Stemp = np.squeeze(np.asarray(s_vec_tmp)).T
+        Ytemp = np.squeeze(np.asarray(y_vec_tmp)).T
+
+        S = np.zeros((num_weights, 0))
+        Y = np.zeros((num_weights, 0))
+
+        counterSucc = 0
+        for idx in range(m):
+
+            L = np.zeros((Y.shape[1], Y.shape[1]))
+            for ii in range(Y.shape[1]):
+                for jj in range(0, ii):
+                    L[ii, jj] = S[:, ii].dot(Y[:, jj])
+
+            tmp = np.sum((S * Y), axis=0)
+            D = np.diag(tmp)
+            M = (D + L + L.T)
+            Minv = np.linalg.inv(M)
+
+            tmp1 = np.matmul(Y.T, Stemp[:, idx])
+            tmp2 = np.matmul(Minv, tmp1)
+            Bksk = np.squeeze(np.matmul(Y, tmp2))
+            yk_BkskDotsk = (Ytemp[:, idx] - Bksk).T.dot(Stemp[:, idx])
+            if np.abs(np.squeeze(yk_BkskDotsk)) > (
+                    eps * (LA.norm(Ytemp[:, idx] - Bksk) * LA.norm(Stemp[:, idx]))):
+                counterSucc += 1
+
+                S = np.append(S, Stemp[:, idx].reshape(num_weights, 1), axis=1)
+                Y = np.append(Y, Ytemp[:, idx].reshape(num_weights, 1), axis=1)
+                y_vec.append(Ytemp[:, idx].reshape(num_weights, 1))
+                s_vec.append(Stemp[:, idx].reshape(num_weights, 1))
 
     S = np.squeeze(np.asarray(s_vec)).T
     Y = np.squeeze(np.asarray(y_vec)).T
@@ -5035,7 +5393,7 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
         xkp1 = xk
         flag = 0
 
-    if flag:
+    if True:#flag:
 
         if retall:
             allvecs.append(xkp1)
@@ -5057,13 +5415,23 @@ def _minimize_osr1(fun, x0, args=(), jac=None, callback=None, timePlot=[],seed=1
             zeta = const - (p_times_q / (p_times_p * gnorm))
         else:
             zeta = const
-        yk = yk + zeta * gnorm * sk
+        myk = yk + zeta * gnorm * sk
 
         gfk = gfkp1
         gfk_vec.append(gfkp1)
 
-        s_vec.append(sk)
-        y_vec.append(yk)
+
+        if abs(np.dot(sk.T, (myk - Bk_skTR))) >= 1e-8 * vecnorm(sk)*vecnorm(myk - Bk_skTR):
+            #print("global conv")
+            s_vec.append(sk)
+            y_vec.append(myk)
+
+
+        elif abs(np.dot(sk.T, (yk - Bk_skTR))) >= 1e-8 * vecnorm(sk)*vecnorm(yk - Bk_skTR):
+            print("no global conv")
+            s_vec.append(sk)
+            y_vec.append(yk)
+
 
 
 
@@ -7292,6 +7660,7 @@ def show_options(solver=None, method=None, disp=True):
             ('olmoq', 'scipy.optimize.optimize._minimize_olmoq'),
             ('olnaq', 'scipy.optimize.optimize._minimize_olnaq'),
             ('olbfgs', 'scipy.optimize.optimize._minimize_olbfgs'),            
+            ('olbfgs1', 'scipy.optimize.optimize._minimize_olbfgs1'),
             ('lmoq', 'scipy.optimize.optimize._minimize_lmoq'),
             ('lnaq', 'scipy.optimize.optimize._minimize_lnaq'),
             ('lbfgs', 'scipy.optimize.optimize._minimize_lbfgs'),

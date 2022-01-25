@@ -2744,14 +2744,14 @@ def _minimize_aSNAQ(fun, x0, args=(), jac=None, callback=None,
     tau = len(sk_vec)
     a = np.zeros(tau)
     for i in reversed(range(tau)):
-        rho = 1 / numpy.dot(yk_vec[i].T, sk_vec[i])
+        rho = 1 / np.dot(yk_vec[i].T, sk_vec[i])
         a[i] = rho * np.dot(sk_vec[i].T, q)
         q = q - np.dot(a[i], yk_vec[i])
     term = np.sum(np.square(F), 0)
     Hk0 = 1 / np.sqrt(term + eps)
     r = Hk0 * q
     for i in range(tau):
-        rho = 1 / numpy.dot(yk_vec[i].T, sk_vec[i])
+        rho = 1 / np.dot(yk_vec[i].T, sk_vec[i])
         beta = rho * np.dot(yk_vec[i].T, r)
         r = r + sk_vec[i] * (a[i] - beta)
     pk = r

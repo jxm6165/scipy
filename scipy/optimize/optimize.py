@@ -2679,6 +2679,174 @@ def _minimize_olbfgs1(fun, x0, args=(), jac=None, callback=None,
 
     return result
 
+def _minimize_aSNAQ(fun, x0, args=(), jac=None, callback=None,
+                     gtol=1e-5, norm=Inf, eps=1e-4, maxiter=None,
+                     disp=False, return_all=False, wo_bar_vec=None, ws_vec=None, vo_bar_vec=None, vs_vec=None,
+                     vk_vec=None, L=5,err=None,
+                     mu_val=None, mu_fac=1.01, mu_init=0.1, mu_clip=0.99, clearF=True, reset=False, dirNorm=True,
+                     iter=None, alpha_k=[1.0], sk_vec=None, yk_vec=None, F=None, t_vec=None, gamma=1.01, old_fun_val=None,
+                     memF=None, memL=None, timeLapse=[],
+                     **unknown_options):
+    """
+    Bk = minibatch
+    |Bk| = b batch size
+    L = 5 memory size chosen from (2,5,10,20)
+    alpha = ?
+    k = iteration count
+    mL = 10
+    mF = 100
+    eps =1e-4
+    gamma = 1.01
+    """
+    _check_unknown_options(unknown_options)
+    f = fun
+    fprime = jac
+    epsilon = eps
+    retall = return_all
+
+    x0 = asarray(x0).flatten()
+    wk = x0.reshape(-1, 1)
+
+    t = t_vec[0]
+    k = iter[0]
+    # eps = 1e-4
+    # gamma = 1.01
+    N = len(wk)
+
+    if k == 0:
+        wo_bar = np.zeros_like(wk)
+        vo_bar = np.zeros_like(wk)
+        ws = np.zeros_like(wk)
+        vs = np.zeros_like(wk)
+        vk = np.zeros_like(wk)
+        mu = mu_val[0]
+
+    else:
+        wo_bar = wo_bar_vec[0]  # np.zeros_like(wk)
+        vo_bar = vo_bar_vec[0]  # np.zeros_like(wk)
+        ws = ws_vec[0]  # 0
+        vs = vs_vec[0]  # 0
+        mu = mu_val[0]  # 0
+        vk = vk_vec[0]  # 0
+
+    func_calls, f = wrap_function(f, args)
+    if fprime is None:
+        grad_calls, myfprime = wrap_function(approx_fprime, (f, epsilon))
+    else:
+        grad_calls, myfprime = wrap_function(fprime, args)
+
+    gfk = myfprime(wk + mu * vk).reshape(-1, 1)
+
+    if k == 0: F.append(gfk)
+    # two loop recursion
+
+    q = gfk
+    tau = len(sk_vec)
+    a = np.zeros(tau)
+    for i in reversed(range(tau)):
+        rho = 1 / numpy.dot(yk_vec[i].T, sk_vec[i])
+        a[i] = rho * np.dot(sk_vec[i].T, q)
+        q = q - np.dot(a[i], yk_vec[i])
+    term = np.sum(np.square(F), 0)
+    Hk0 = 1 / np.sqrt(term + eps)
+    r = Hk0 * q
+    for i in range(tau):
+        rho = 1 / numpy.dot(yk_vec[i].T, sk_vec[i])
+        beta = rho * np.dot(yk_vec[i].T, r)
+        r = r + sk_vec[i] * (a[i] - beta)
+    pk = r
+    if vecnorm(pk, 2) == np.inf or vecnorm(pk, 2) == np.nan:
+        pk = np.ones_like(wk)
+
+    elif dirNorm:
+        pk = pk / vecnorm(pk, 2)  # Exploding gradients (direction normalization)
+
+    if k == 0: F.clear()
+    '''
+    pk = -gfk
+    a = []
+
+    idx = len(sk_vec)
+    for i in range(len(sk_vec)):
+        a.append(numpy.dot(sk_vec[idx - 1 - i].T, pk) / numpy.dot(sk_vec[idx - 1 - i].T, yk_vec[idx - 1 - i]))
+        pk = pk - a[i] * yk_vec[idx - 1 - i]
+
+    term = np.sum(np.square(F), 0)
+    Hk0 = 1 / np.sqrt(term + eps)
+    pk = Hk0 * pk
+    for i in reversed(range(len(sk_vec))):
+        b = numpy.dot(yk_vec[idx - 1 - i].T, pk) / numpy.dot(yk_vec[idx - 1 - i].T, sk_vec[idx - 1 - i])
+        pk = pk + (a[i] - b) * sk_vec[idx - 1 - i]
+    '''
+
+    flag_ret = 1
+
+    vk = mu * vk - alpha_k[0] * pk
+    wk = wk + vk
+
+    ws = ws + wk  # +mu*vk
+    vs = vs + vk
+
+    gfkp1 = myfprime(wk).reshape(-1, 1)
+    F.append(gfkp1)
+
+    if k % L == 0:
+        wn_bar = ws / L
+        vn_bar = vs / L
+        ws = np.zeros_like(wk)
+        vs = np.zeros_like(wk)
+        if t > 0:
+            if f(wn_bar) > gamma * f(wo_bar):
+                sk_vec.clear()
+                yk_vec.clear()
+                mu = np.minimum(mu / mu_fac, mu_clip)
+                mu = np.maximum(mu, mu_init)
+                if clearF: F.clear()
+                #print("Clearing buffers")
+                wk = wo_bar
+                vk = vo_bar
+                flag_ret = 0
+            if flag_ret:
+                sk = wn_bar - wo_bar
+                fisher = np.asarray(F)[:, :, 0].T
+                yk = np.dot(fisher, np.dot(fisher.T, sk))
+                mu = np.minimum(mu * mu_fac, mu_clip)
+                # yk = (np.sum(fisher, 1, keepdims=True) * sk) / shape(fisher)[-1]
+                # yk = 0
+                # for i in F:
+                #    yk += np.dot(i,np.dot(i.T,sk))
+                # yk = yk/len(F)
+                if np.dot(sk.T, yk) > eps * np.dot(yk.T, yk):
+                    sk_vec.append(sk)
+                    yk_vec.append(yk)
+                    wo_bar = wn_bar
+                    vo_bar = vn_bar
+        else:
+            wo_bar = wn_bar
+            vo_bar = vn_bar
+        t += 1
+        t_vec.append(t)
+
+    if callback is not None:
+        callback(wk)
+    k += 1
+    iter.append(k)
+    mu_val.append(mu)
+    wo_bar_vec.append(wo_bar)  # np.zeros_like(wk)
+    vo_bar_vec.append(vo_bar)  # np.zeros_like(wk)
+    ws_vec.append(ws)  # 0
+    vs_vec.append(vs)  # 0
+    vk_vec.append(vk)  # 0
+    #memL.append(len(sk_vec))
+    #memF.append(len(F))
+    #err.append(f(wk))
+
+    result = OptimizeResult(fun=0, jac=0, hess_inv=0, nfev=0,
+                            njev=0, status=0,
+                            success=(0), message=0, x=wk,
+                            nit=k)
+
+    return result
 
 def _minimize_olnaq(fun, x0, args=(), jac=None, callback=None,
                     gtol=1e-5, norm=Inf, eps=_epsilon, maxiter=None, err=[], timeplot=[],
@@ -7657,6 +7825,7 @@ def show_options(solver=None, method=None, disp=True):
     doc_routines = {
         'minimize': (
             ('bfgs', 'scipy.optimize.optimize._minimize_bfgs'),
+            ('asnaq', 'scipy.optimize.optimize._minimize_aSNAQ'),
             ('olmoq', 'scipy.optimize.optimize._minimize_olmoq'),
             ('olnaq', 'scipy.optimize.optimize._minimize_olnaq'),
             ('olbfgs', 'scipy.optimize.optimize._minimize_olbfgs'),            

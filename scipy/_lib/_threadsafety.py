@@ -1,5 +1,5 @@
 import threading
-from . import decorator
+from .decorator import decorate
 
 
 __all__ = ['ReentrancyError', 'ReentrancyLock', 'non_reentrant']
@@ -41,7 +41,7 @@ class ReentrancyLock:
         def caller(func, *a, **kw):
             with self:
                 return func(*a, **kw)
-        return decorator.decorate(func, caller)
+        return decorate(func, caller)
 
 
 def non_reentrant(err_msg=None):
